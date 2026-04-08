@@ -235,7 +235,7 @@ class AudioCD:
         assert np.shape(interpolation_flags)[1]==2 and type(interpolation_flags) is np.ndarray, 'interpolation_flags must be a 2D numpy array with 2 columns'
         return (audio_out,interpolation_flags)
 
-    def CIRC_enc_delay_interleave(self,input,n_frames):
+    def CIRC_enc_delay_interleave(self,input,n_frames): ############## dont completely understand #######################""
         # CIRC Encoder: Delay of 2 frames + interleaving sequence
         # Input:
         #  -input: the input to this block of the CIRC encoder (1D numpy array)
@@ -244,13 +244,36 @@ class AudioCD:
         #  -output: the output of this block of the CIRC encoder (1D numpy array)
         #  -n_frames: the length of the output expressed in frames (changed from input because of delay!)
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
-
+        
         #insert your code here
+
+        n_frames_output = n_frames + 2 
+
+        output_temp = np.zeros(n_frames_output * 24)
+
+        
+        # delay all even numbered symbols
+        for n in range(n_frames):
+            for i in range(24): # 24 symbols of 8 bits
+                if (i // 4) % 2 == 0: # even samples have a delay of 2 frames 
+                    output_temp[(n + 2) * 24 + i] = input[n * 24 + i] #1 frame = 24 symbols, 2 frames = 2*24 = 48 symbols
+                else:
+                    output_temp[n * 24 + i] = input[n * 24 + i] #uneven samples are not delayed
+
+        # interleave 
+        output = np.zeros(n_frames_output * 24)
+        for n in range(n_frames_output):
+            for i in range(12): 
+                output[n * 24 + i] = output_temp[n * 24 + i * 2]
+                output[n * 24 + i + 12] = output_temp[n * 24 + i * 2 + 1]
+        #print(output[0:20])
+
+        n_frames = n_frames_output
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         return (output,n_frames)
 
-    def CIRC_enc_C2(self,input,n_frames):
+    def CIRC_enc_C2(self,input,n_frames): 
         # CIRC Encoder: Generation of 4 parity symbols (C2)
         # Input:
         #  -input: the input to this block of the CIRC encoder (1D numpy array)
@@ -260,11 +283,20 @@ class AudioCD:
         #  -n_frames: the length of the output expressed in frames
 
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
-
+                
         #insert your code here
+        input=input.astype('B')                                 # input: 24 symbols 
+        output = np.zeros(int(n_frames*28),dtype='B')           # (28,24) RS code, 28 = 24 symbols + 4 parity symbols
+
+        for n in range(n_frames):
+            input_frame = input[n*24:(n+1)*24]                  # take one input frame
+            encoded_frame = self.rsc2.encode(input_frame)       # encode this input frame
+            output[n*28:n*28+12] = encoded_frame[0:12]          # first 12 symbols of encoded frame
+            output[n*28+12:n*28+16] = encoded_frame[24:28]      # middel 4 symbols are the 4 Q parity symbols
+            output[n*28+16:n*28+28] = encoded_frame[12:24]      # last 12 symbols of encoded frame
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
-        return (output,n_frames)
+        return (output,n_frames)                                # output has same number of frames as input
 
     def CIRC_enc_delay_unequal(self,input,n_frames):
         # CIRC Encoder: Delay lines of unequal length
@@ -277,6 +309,18 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+        D = 4
+
+        n_frames_output = n_frames + D*27                       # maximum delay of 27*D (=27*4=108)
+        output = np.zeros(n_frames_output * 28, dtype = 'B')
+
+        for n in range(n_frames):
+            for i in range(28):
+                delay = i*D
+                output[(n+delay)*28 + i] = input[n*28 + i]
+
+        n_frames = n_frames_output
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         return (output,n_frames)
@@ -292,6 +336,13 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         #insert your code here
+        input=input.astype('B')                                 # input: 28 symbols 
+        output = np.zeros(int(n_frames*32),dtype='B')           # (32,28) RS code, 32 = 28 symbols + 4 P parity symbols
+
+        for n in range(n_frames):
+            input_frame = input[n*28:(n+1)*28]                  # take one input frame
+            encoded_frame = self.rsc2.encode(input_frame)       # encode this input frame
+            output[n*32:(n+1)*32] = encoded_frame[0:32]         # order here is correct, four P parity symbols at the end 
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         return (output,n_frames)
@@ -307,6 +358,23 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+        n_frames_output = n_frames + 1                          # delay 1
+        output = np.zeros(n_frames_output * 32, dtype = 'B')
+
+        for n in range(n_frames):
+            for i in range(32):
+                if i % 2 == 0:                                  # symbols with even index are delayed by 1
+                    output[(n+1)*32 + i] = input[n*32 + i]
+                else:                                           # symbols with odd index are not delayed
+                    output[n*32 + i] = input[n*32 + i]
+        
+        #inverting parity symbols
+        for n in range(n_frames_output):
+            for i in [12,13,14,15,28,29,30,31]:                 #indices of parity symbols
+                output[n*32 + i] = output[n*32 + i] ^ 0xFF      #inversion of parity symbols
+
+        n_frames = n_frames_output
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         return (output,n_frames)
@@ -558,3 +626,7 @@ class AudioCD:
         print(f'Number undetected errors: {np.sum(out[interpolation_flags==0] != cd.scaled_quantized_padded_original[interpolation_flags==0])}')
 
         pass
+
+
+if __name__ == "__main__":
+    AudioCD.test()

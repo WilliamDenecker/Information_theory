@@ -390,6 +390,23 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+        n_frames_output = n_frames - 1                          # 1 frame delay, the amount of frames is reduced by 1
+        output = np.zeros(int(n_frames_output) * 32, dtype = 'B')    # output is 1D numpy array (frame: 32 symbols of 8 bits)
+
+        # Delay of 1 frame
+        for n in range(int(n_frames_output)):
+            for i in range(32):                                 # 32 symbols per frame
+                if i % 2 == 0:                                  # even-indexed symbols came from the next disc frame
+                    output[n*32 + i] = input[(n+1)*32 + i]
+                else:                                           # odd-indexed symbols came from the current disc frame
+                    output[n*32 + i] = input[n*32 + i]
+        
+            # inverting parity symbols
+            for i in [12,13,14,15,28,29,30,31]:                 #indices of parity symbols
+                output[n*32 + i] = output[n*32 + i] ^ 0xFF      #inversion of parity symbols
+
+        n_frames = n_frames_output
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         return (output,n_frames)
@@ -406,6 +423,28 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+        output = np.zeros(int(n_frames) * 28, dtype = 'B')               # C1 decoder output consists of 28 symbols
+        erasure_flags_out = np.zeros(int(n_frames) * 28)
+
+        for n in range(int(n_frames)):
+            # output of RSCodec.decode: decoded message, decoded message + error correction code, list of positions of the erata
+            frame = input[(n)*32:(n+1)*32]
+
+            try:
+                decoded, _, err =self.rsc1.decode(frame, erase_pos=None)
+                len_err = len(err) # number of corrected errors
+                output[n*28:(n+1)*28] = decoded
+            
+            # if more than one error, the C1 decoder cannot fix the error, the data is passed along to C2, all symbols of received word are assigned erasure flags
+            except Exception:  
+                len_err = -1
+                output[n*28:(n+1)*28] = frame[:28]
+
+            if len_err == -1 or len_err >= 2:
+                erasure_flags_out[n*28:(n+1)*28] = 1
+        
+        # no delay in this part, n_frames at output remains the same
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         assert len(np.shape(erasure_flags_out))==1 and type(erasure_flags_out) is np.ndarray, 'erasure_flags_out must be a 1D numpy array'
@@ -425,6 +464,21 @@ class AudioCD:
         assert len(np.shape(erasure_flags_in))==1 and type(erasure_flags_in) is np.ndarray, 'erasure_flags_in must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+        erasure_flags_in = erasure_flags_in.astype(bool)
+
+        D = 4
+        n_frames_output = n_frames - 27*D
+        output = np.zeros(int(n_frames_output) * 28, dtype = 'B')
+        erasure_flags_out = np.zeros(int(n_frames_output) * 28)
+
+        for n in range(int(n_frames_output)):
+            for i in range(28):
+                delay = i*D
+                output[n*28 + i] = input[(n + delay)*28 + i]
+                erasure_flags_out[n*28 + i] = erasure_flags_in[(n + delay)*28 + i]
+    
+        n_frames = n_frames_output 
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         assert len(np.shape(erasure_flags_out))==1 and type(erasure_flags_out) is np.ndarray, 'erasure_flags_out must be a 1D numpy array'
@@ -444,6 +498,41 @@ class AudioCD:
         assert len(np.shape(erasure_flags_in))==1 and type(erasure_flags_in) is np.ndarray, 'erasure_flags_in must be a 1D numpy array'
 
         #insert your code here
+        input = input.astype('B')
+
+        output = np.zeros(int(n_frames) * 24, dtype = 'B')
+        erasure_flags_out = np.zeros(int(n_frames) * 24)
+
+        for n in range(int(n_frames)):
+            # middle four symbols are the parity symbols, so rearrange before decoding: putting parity symbols at the end
+            frame = np.concatenate((input[n*28:n*28+12], input[n*28+16:(n+1)*28], input[n*28+12:n*28+16]))
+            flags_frame = np.concatenate((erasure_flags_in[n*28:n*28+12], erasure_flags_in[n*28+16:(n+1)*28], erasure_flags_in[n*28+12:n*28+16]))
+
+            f = np.sum(flags_frame)  
+
+            # if zero or one error, then modify at most one symbol accordingly    
+            if f <= 1:
+                decoded, _, err = self.rsc2.decode(frame, erase_pos=None)
+                output[n*24:(n+1)*24] = decoded
+                # erasure_flags_out remains zero at these indices since the error is corrected
+            
+            # if more than 2 errors (f>2), then copy C2 erasure flags from C1 erasure flags
+            elif f > 2:
+                output[n*24:(n+1)*24] = frame[:24]
+                erasure_flags_out[n*24:(n+1)*24] = flags_frame[:24]
+
+            # elseif 2 errors (f=2) and error correction successful, then modify the symbols accordingly
+            else: #f == 2
+                erase_pos = np.where(flags_frame == 1)
+
+                try: # error correction successful?
+                    decoded, _, err = self.rsc2.decode(frame, erase_pos = erase_pos)
+                    output[n*24:(n+1)*24] = decoded
+                    # erasure_flags_out remains zero at these indices since the errors are corrected
+
+                except Exception: #else, assign erasure flags to all symbols of the received word
+                    output[n*24:(n+1)*24] = frame[:24]
+                    erasure_flags_out[n*24:(n+1)*24] = [1]*24
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         assert len(np.shape(erasure_flags_out))==1 and type(erasure_flags_out) is np.ndarray, 'erasure_flags_out must be a 1D numpy array'
@@ -462,8 +551,51 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
         assert len(np.shape(erasure_flags_in))==1 and type(erasure_flags_in) is np.ndarray, 'erasure_flags_in must be a 1D numpy array'
 
-        #insert your code here
+        input = input.astype('B')
 
+        #step 1: de-interleave
+
+        # encoder interleaved the 24 bytes of each frame by seperating even and odd indexed symbols into two groups
+        # encoder interleave:   even byte positions (0,2,4,...,22) of a frame → output positions 0-11
+        #                       odd  byte positions (1,3,5,...,23) of a frame → output positions 12-23
+        # decoder interleaver:  input positions  0-11 → even byte positions (0,2,...,22) of temp frame
+        #                       input positions 12-23 → odd  byte positions (1,3,...,23) of temp frame
+
+        output_temp = np.zeros(int(n_frames) * 24, dtype='B')
+        flags_temp  = np.zeros(int(n_frames) * 24)
+
+        for n in range(int(n_frames)):
+            for i in range(24):
+                if i%2 == 0:                                                # even positions
+                    output_temp[n*24 + i] = input[n*24 + i//2]
+                    flags_temp[n*24 + i]  = erasure_flags_in[n*24 + i//2]
+                else:                                                       # odd positions
+                    output_temp[n*24 + i] = input[n*24 + i//2 + 12]
+                    flags_temp[n*24 + i]  = erasure_flags_in[n*24 + i//2 + 12]
+
+        # step 2: 2-frame delay
+
+        # encoder delayed even numbered words by 2 (bytes where (i//4) == 0)
+        # encoder:  frame n, byte i (even word) → temp frame n+2
+        #           frame n, byte i (odd word)  → temp frame n
+        # decoder:  temp frame n+2, byte i   if (i//4)%2 == 0  
+        #           temp frame n,   byte i   else
+
+        n_frames_output = int(n_frames) - 2
+        output = np.zeros(n_frames_output * 24, dtype='B')
+        erasure_flags_out = np.zeros(n_frames_output * 24)
+
+        for n in range(n_frames_output):
+            for i in range(24):
+                if (i // 4) % 2 == 0:   # even word symbol
+                    output[n*24 + i]          = output_temp[(n+2)*24 + i]
+                    erasure_flags_out[n*24 + i] = flags_temp[(n+2)*24 + i]
+                else:                    # odd word symbol
+                    output[n*24 + i]          = output_temp[n*24 + i]
+                    erasure_flags_out[n*24 + i] = flags_temp[n*24 + i]
+
+        n_frames = n_frames_output
+        
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         assert len(np.shape(erasure_flags_out))==1 and type(erasure_flags_out) is np.ndarray, 'erasure_flags_out must be a 1D numpy array'
         return (output,erasure_flags_out,n_frames)

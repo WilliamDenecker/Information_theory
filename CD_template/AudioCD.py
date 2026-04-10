@@ -120,7 +120,7 @@ class AudioCD:
         # Add uniform bit errors to cd
         # Input:
         #  -p: the bit error probability, i.e., a self.cd_bits bit is flipped with probability p
-        noise = np.random.rand((self.cd_bits).shape)<p
+        noise = np.random.rand(*self.cd_bits.shape)<p
         self.cd_bits = np.bitwise_xor(self.cd_bits,noise.astype(int))
         return
 
@@ -628,7 +628,7 @@ class AudioCD:
         #inverse: original frame m, byte i =
         #   temp frame m+2, byte i   if (i//4)%2 == 0  (even-word bytes were delayed)
         #   temp frame m,   byte i   otherwise
-        #output has 2 fewer frames than the temp array because reconstructing
+        #heoutput has 2 fewer frames than the temp array because reconstructing
         # frame 0 requires temp frame 2 for its delayed bytes.
         n_frames_output = int(n_frames) - 2
         output = np.zeros(n_frames_output * 24, dtype='B')
@@ -812,5 +812,116 @@ class AudioCD:
         pass
 
 
+    @staticmethod
+    def test_q5():
+        import matplotlib.pyplot as plt
+
+        # --- Load audio file ---
+        wave_object = wave.open('Hallelujah.wav', 'rb')
+        Fs       = wave_object.getframerate()
+        nch      = wave_object.getnchannels()
+        depth    = wave_object.getsampwidth()
+        sdata    = wave_object.readframes(wave_object.getnframes())
+        typ      = {1: np.int8, 2: np.int16, 4: np.int32}.get(depth)
+        data     = np.frombuffer(sdata, dtype=typ).astype(float) / (2**15)
+        audiofile = np.transpose(np.vstack((data[0::nch], data[1::nch])))
+
+        # ================================================================
+        # Part (a): Scratch performance across all 4 configurations
+        # ================================================================
+        T_scratch      = 600000
+        scratch_lengths = [100, 3000, 10000]
+        configurations  = [0, 1, 2, 3]
+
+        print('\n=== Part (a): Scratch performance ===')
+        print(f'{"Config":<8}{"Scratch":>10}{"Erasures":>12}{"Interpolated":>14}{"Failed":>10}{"Undetected":>12}')
+        print('-' * 68)
+
+        for config in configurations:
+            # Write the CD once per configuration
+            cd = AudioCD(Fs, config, 8)
+            cd.writeCd(audiofile)
+            total_samples = cd.scaled_quantized_padded_original.size  # total audio samples (both channels)
+
+            for l_scratch in scratch_lengths:
+                cd_test = copy.deepcopy(cd)
+                # Apply the scratch repeatedly at every disc rotation
+                for i in range(math.floor(cd_test.cd_bits.size / T_scratch)):
+                    cd_test.scratchCd(l_scratch, 30000 + i * T_scratch)
+
+                [out, flags] = cd_test.readCd()
+                n_erasures     = int(np.sum(flags != 0))
+                n_interpolated = int(np.sum(flags ==  1))
+                n_failed       = int(np.sum(flags == -1))
+                # Undetected errors: samples that are wrong but carry no erasure flag
+                n_undetected   = int(np.sum(out[flags == 0] != cd.scaled_quantized_padded_original[flags == 0]))
+                print(f'{config:<8}{l_scratch:>10}{n_erasures:>12}{n_interpolated:>14}{n_failed:>10}{n_undetected:>12}')
+
+        # ================================================================
+        # Part (b): Random bit error performance (configs 1, 2, 3)
+        # ================================================================
+        # Bit error probabilities: 10 values log-spaced from 0.05 to 0.001
+        p_values   = np.logspace(-1 - math.log10(2), -3, 10)
+        configs_b  = [1, 2, 3]
+        colors     = {1: 'tab:blue', 2: 'tab:orange', 3: 'tab:green'}
+        labels     = {1: 'Config 1 (full CIRC)',
+                      2: 'Config 2 (concat. RS, no interleaving)',
+                      3: 'Config 3 (single RS(32,24))'}
+
+        # Pre-write each CD once (encoding is deterministic)
+        cds = {}
+        for config in configs_b:
+            cd = AudioCD(Fs, config, 8)
+            cd.writeCd(audiofile)
+            cds[config] = cd
+
+        total_samples = cds[1].scaled_quantized_padded_original.size
+
+        # Collect erasure and failed-interpolation probabilities
+        erasure_probs = {c: [] for c in configs_b}
+        failed_probs  = {c: [] for c in configs_b}
+
+        print('\n=== Part (b): Random bit error performance ===')
+        print(f'{"Config":<8}{"p":>10}{"P(erasure)":>14}{"P(failed)":>14}')
+        print('-' * 50)
+
+        for p in p_values:
+            for config in configs_b:
+                cd_test = copy.deepcopy(cds[config])
+                cd_test.bitErrorsCd(p)                   # introduce random bit errors
+                [out, flags] = cd_test.readCd()
+
+                p_erasure = np.sum(flags != 0) / total_samples
+                p_failed  = np.sum(flags == -1) / total_samples
+                erasure_probs[config].append(p_erasure)
+                failed_probs[config].append(p_failed)
+                print(f'{config:<8}{p:>10.5f}{p_erasure:>14.6f}{p_failed:>14.6f}')
+
+        # --- Plot ---
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+
+        for config in configs_b:
+            # Replace exact zeros with a small floor so log scale works
+            ep = [max(v, 1e-8) for v in erasure_probs[config]]
+            fp = [max(v, 1e-8) for v in failed_probs[config]]
+            ax1.loglog(p_values, ep, marker='o', color=colors[config], label=labels[config])
+            ax2.loglog(p_values, fp, marker='o', color=colors[config], label=labels[config])
+
+        for ax, title, ylabel in [
+            (ax1, 'P(erasure flag) vs bit error probability',    'P(erasure flag)'),
+            (ax2, 'P(failed interpolation) vs bit error probability', 'P(failed interpolation)'),
+        ]:
+            ax.set_xlabel('Bit error probability $p$')
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.legend()
+            ax.grid(True, which='both', linestyle='--', alpha=0.6)
+
+        plt.tight_layout()
+        plt.savefig('q5b_random_errors.png', dpi=150)
+        plt.show()
+        print('Plot saved to q5b_random_errors.png')
+
+
 if __name__ == "__main__":
-    AudioCD.test()
+    AudioCD.test_q5()

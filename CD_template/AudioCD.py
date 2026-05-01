@@ -235,7 +235,7 @@ class AudioCD:
         assert np.shape(interpolation_flags)[1]==2 and type(interpolation_flags) is np.ndarray, 'interpolation_flags must be a 2D numpy array with 2 columns'
         return (audio_out,interpolation_flags)
 
-    def CIRC_enc_delay_interleave(self,input,n_frames): ############## dont completely understand #######################""
+    def CIRC_enc_delay_interleave(self,input,n_frames): 
         # CIRC Encoder: Delay of 2 frames + interleaving sequence
         # Input:
         #  -input: the input to this block of the CIRC encoder (1D numpy array)
@@ -245,8 +245,7 @@ class AudioCD:
         #  -n_frames: the length of the output expressed in frames (changed from input because of delay!)
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
         
-        #insert your code here
-
+        # delay of 2 frames, so the output is 2 frames longer than the input
         n_frames_output = n_frames + 2 
 
         output_temp = np.zeros(n_frames_output * 24)
@@ -254,16 +253,17 @@ class AudioCD:
         
         # delay all even numbered symbols
         for n in range(n_frames):
-            for i in range(24): # 24 symbols of 8 bits
-                if (i // 4) % 2 == 0: # even samples have a delay of 2 frames 
-                    output_temp[(n + 2) * 24 + i] = input[n * 24 + i] #1 frame = 24 symbols, 2 frames = 2*24 = 48 symbols
+            for i in range(24):                                         # 24 symbols of 8 bits
+                if (i // 4) % 2 == 0:                                   # even samples have a delay of 2 frames 
+                    output_temp[(n + 2) * 24 + i] = input[n * 24 + i]   # 1 frame = 24 symbols, 2 frames = 2*24 = 48 symbols
                 else:
-                    output_temp[n * 24 + i] = input[n * 24 + i] #uneven samples are not delayed
+                    output_temp[n * 24 + i] = input[n * 24 + i]         #uneven samples are not delayed
 
-        # interleave 
+        # interleave
         output = np.zeros(n_frames_output * 24)
         for n in range(n_frames_output):
             for i in range(12): 
+                # even and odd datawords are separated
                 output[n * 24 + i] = output_temp[n * 24 + i * 2]
                 output[n * 24 + i + 12] = output_temp[n * 24 + i * 2 + 1]
         #print(output[0:20])
@@ -284,7 +284,6 @@ class AudioCD:
 
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
                 
-        #insert your code here
         input=input.astype('B')                                 # input: 24 symbols 
         output = np.zeros(int(n_frames*28),dtype='B')           # (28,24) RS code, 28 = 24 symbols + 4 parity symbols
 
@@ -310,7 +309,7 @@ class AudioCD:
 
         #insert your code here
         input = input.astype('B')
-        D = 4
+        D = 4                                                   # inter-symbol delay unit in frames (from the standard)
 
         n_frames_output = n_frames + D*27                       # maximum delay of 27*D (=27*4=108)
         output = np.zeros(n_frames_output * 28, dtype = 'B')
@@ -318,7 +317,7 @@ class AudioCD:
         for n in range(n_frames):
             for i in range(28):
                 delay = i*D
-                output[(n+delay)*28 + i] = input[n*28 + i]
+                output[(n+delay)*28 + i] = input[n*28 + i]      # delay of 0, 4, 8, ..., 108 frames
 
         n_frames = n_frames_output
 
@@ -365,14 +364,14 @@ class AudioCD:
         for n in range(n_frames):
             for i in range(32):
                 if i % 2 == 0:                                  # symbols with even index are delayed by 1
-                    output[(n+1)*32 + i] = input[n*32 + i]
+                    output[(n+1)*32 + i] = input[n*32 + i]      # even byte of C1 frame n  →  disc frame n+1
                 else:                                           # symbols with odd index are not delayed
-                    output[n*32 + i] = input[n*32 + i]
+                    output[n*32 + i] = input[n*32 + i]          # odd  byte of C1 frame n  →  disc frame n
         
         #inverting parity symbols
         for n in range(n_frames_output):
-            for i in [12,13,14,15,28,29,30,31]:                 #indices of parity symbols
-                output[n*32 + i] = output[n*32 + i] ^ 0xFF      #inversion of parity symbols
+            for i in [12,13,14,15,28,29,30,31]:                 # positions of parity symbols (Q parity at 12-15, P parity at 28-31)
+                output[n*32 + i] = output[n*32 + i] ^ 0xFF      # inversion of parity symbols (XOR with 0xFF)
 
         n_frames = n_frames_output
 
@@ -391,35 +390,23 @@ class AudioCD:
 
         input = input.copy().astype('B')
 
-        #step 1: undo parity inversion
-        #the encoder XORed parity bytes with 0xFF to ensure non-zero symbols even
-        #during silent (all-zero) audio passages, preserving clock synchronisation.
-        #Applying XOR 0xFF again restores the original parity values.
-        #parity byte positions within a 32-byte C1 frame: Q parity at 12-15, P parity at 28-31.
+        # inverting parity symbols
         for n in range(int(n_frames)):
-            for i in [12, 13, 14, 15, 28, 29, 30, 31]:
-                input[n*32 + i] ^= 0xFF
+            for i in [12, 13, 14, 15, 28, 29, 30, 31]:          # positions of parity symbols (Q parity at 12-15, P parity at 28-31)
+                input[n*32 + i] ^= 0xFF                         # inversion of parity symbols (XOR with 0xFF)
 
-        #Step 2: undo 1-frame delay on even-indexed symbol
-        #the encoder delayed all even-indexed bytes of each C1 codeword by 1 disc frame,
-        #so that adjacent symbols of the same codeword are physically separated on disc.
-        #this ensures a small error hitting two adjacent disc bytes only corrupts one symbol
-        #in each of two separate C1 codewords, rather than two symbols in one codeword.
-        #encoder mapping:  even byte of C1 frame n  →  disc frame n+1
-        #                   odd  byte of C1 frame n  →  disc frame n
-        #enverse: to reconstruct C1 frame n we take
-        #   even bytes from disc frame n+1  (advance by 1)
-        #   odd  bytes from disc frame n    (no shift)
-        #this reduces the frame count by 1 (the last disc frame only contributes
-        #even bytes to the already-reconstructed last C1 frame).
-        n_frames_output = int(n_frames) - 1
+        # delay of 1 frame -> undo 1-frame delay on even-indexed symbols
+        # encoder delayed all even-indexed bytes of each C1 codeword by 1 disc frame
+        # decoder undoes this delay
+        n_frames_output = int(n_frames) - 1                     # undo 1-frame delay -> reduces frame count by 1
         output = np.zeros(n_frames_output * 32, dtype='B')
+
         for n in range(n_frames_output):
-            for i in range(32):
-                if i % 2 == 0:          # even-indexed byte: came from the next disc frame
-                    output[n*32 + i] = input[(n+1)*32 + i]
-                else:                   # odd-indexed byte: came from the current disc frame
-                    output[n*32 + i] = input[n*32 + i]
+            for i in range(32):                                 # 32 symbols per frame
+                if i % 2 == 0:                                  # even-indexed symbols came from the next disc frame
+                    output[n*32 + i] = input[(n+1)*32 + i]      # even byte from disc frame n+1 (advance by 1)
+                else:                                           # odd-indexed symbols came from the current disc frame
+                    output[n*32 + i] = input[n*32 + i]          # odd  byte from disc frame n (no shift)
 
         n_frames = n_frames_output
 
@@ -438,34 +425,44 @@ class AudioCD:
         assert len(np.shape(input))==1 and type(input) is np.ndarray, 'input must be a 1D numpy array'
 
         input = input.astype('B')
-        output = np.zeros(int(n_frames) * 28, dtype='B')
+        output = np.zeros(int(n_frames) * 28, dtype='B')            # C1 decoder output consists of 28 symbols
         erasure_flags_out = np.zeros(int(n_frames) * 28)
 
-        #C1 is a (32,28) RS code over GF(2^8) with 4 P-parity symbols,
-        #giving a minimum distance of 5 and an error-correction capability of t=2.
-        #CIRC decoding policy for C1:
+        # C1 is a (32,28) RS code over GF(2^8) with 4 P-parity symbols:
+        # minimum distance of 5 and an error-correction capability of t=2.
+
+        # CIRC decoding policy for C1:
         #   0 errors detected : pass through unchanged, no flag
         #   1 error  detected : correct and pass through, no flag
         #   2+ errors detected: do NOT correct (unreliable), flag entire frame for C2
         #   decoding failure  : flag entire frame for C2
-        #flagging with 2 errors (rather than correcting) is intentional: correcting
-        #2 errors uses all 4 parities, leaving no redundancy to verify the correction.
-        #flagging instead lets C2 handle the word as an erasure, which is more reliable.
+
+        # flagging with 2 errors (rather than correcting) is intentional: correcting
+        # 2 errors uses all 4 parities, leaving no redundancy to verify the correction.
+        # flagging instead lets C2 handle the word as an erasure, which is more reliable.
+
         for n in range(int(n_frames)):
+
             frame = bytes(input[n*32:(n+1)*32])
+
             try:
+                # output of RSCodec.decode: decoded message, decoded message + error correction code, list of positions of the erata
                 decoded, _, err = self.rsc1.decode(frame, erase_pos=None)
                 ERR = len(err)          # number of corrected symbol positions
                 output_dec = list(decoded)
+
             except Exception:
-                # More errors than C1 can handle; pass through the raw (corrupted) data
+                # More errors than C1 can handle: pass through the raw (corrupted) data
                 ERR = -1
                 output_dec = list(input[n*32 : n*32 + 28])
 
             output[n*28:(n+1)*28] = output_dec
+
             if ERR == -1 or ERR >= 2:
                 # Flag all 28 symbols of this frame so C2 treats them as erasures
                 erasure_flags_out[n*28:(n+1)*28] = 1
+
+        # no delays, n_frames at output remains the same
 
         assert len(np.shape(output))==1 and type(output) is np.ndarray, 'output must be a 1D numpy array'
         assert len(np.shape(erasure_flags_out))==1 and type(erasure_flags_out) is np.ndarray, 'erasure_flags_out must be a 1D numpy array'
@@ -487,16 +484,12 @@ class AudioCD:
         input = input.astype('B')
         D = 4   # inter-symbol delay unit in frames (from the standard)
 
-        #the encoder applied a staggered delay to the 28 symbols of each C2 codeword:
-        #symbol i was delayed by i*D frames before C1 encoding.  This spreads the
-        #symbols of one C2 codeword across 109 consecutive disc frames (0 to 27*D=108),
-        #so a burst error can only corrupt a limited number of symbols per codeword.
-        #inverse: to reassemble C2 codeword m, symbol i must be fetched from
-        #C1-decoded frame m + i*D (the frame where the encoder placed it).
-        #all 28 symbols of codeword m are gathered from frames m, m+4, m+8, ..., m+108.
-        #the output has 27*D = 108 fewer frames than the input because the first
-        #output frame needs symbol 27 from C1 frame 0 + 27*D = 108.
-        n_frames_output = int(n_frames) - D * 27
+        # unequal delay to the 28 symbols of each C2 codeword was applied by the encoder:
+        # symbol i was delayed by i*D frames before C1 encoding (0 to 27*D=108)
+        # inverse:
+        # to reassemble C2 codeword m, symbol i must be fetched from C1 decoded frame m+i*D
+
+        n_frames_output = int(n_frames) - D * 27    # maximum delay was 27*D = 108 frames    
         output = np.zeros(n_frames_output * 28, dtype='B')
         erasure_flags_out = np.zeros(n_frames_output * 28)
 
@@ -526,32 +519,32 @@ class AudioCD:
         assert len(np.shape(erasure_flags_in))==1 and type(erasure_flags_in) is np.ndarray, 'erasure_flags_in must be a 1D numpy array'
 
         input = input.astype('B')
+
+        # C2 is a (28,24) RS code over GF(2^8) with 4 Q-parity symbols
+        # It can correct up to 4 erasures (symbols whose positions are known from C1 flags)
+        # Decoding fails if too many erasures or additional symbol errors
+        # Then entire 24-symbol output word is flagged
+        
         output = np.zeros(int(n_frames) * 24, dtype='B')
         erasure_flags_out = np.zeros(int(n_frames) * 24)
 
-        #C2 is a (28,24) RS code over GF(2^8) with 4 Q-parity symbols.
-        #it can correct up to 4 erasures (symbols whose positions are known from C1 flags).
-        #if decoding fails (too many erasures or additional symbol errors), the entire
-        #24-symbol output word is flagged for the interpolator to conceal.
         for n in range(int(n_frames)):
             frame = input[n*28:(n+1)*28]
             flags = erasure_flags_in[n*28:(n+1)*28]
 
-            #the C2 encoder inserted the 4 Q parity symbols in the centre of the frame
-            #to increase the physical distance between even and odd audio samples on disc,
-            #improving interpolation in case of uncorrectable burst errors.
-            #CIRC layout : [data 0-11 | Q parity 0-3 | data 12-23]  (positions 0-27)
-            #reedsolo expects : [data 0-11 | data 12-23 | Q parity 0-3]
-            #teorder the frame and remap erasure positions accordingly.
+            # The C2 encoder inserted the 4 Q parity symbols in the centre of the frame (positions 12-15)
+            # CIRC layout : [data 0-11 | Q parity 0-3 | data 12-23]  (positions 0-27)
+            # reedsolo expects : [data 0-11 | data 12-23 | Q parity 0-3]
+            # Reorder the frame and remap erasure positions accordingly
             reordered = np.zeros(28, dtype='B')
             reordered[0:12]  = frame[0:12]    # data symbols 0-11  stay in place
             reordered[12:24] = frame[16:28]   # data symbols 12-23 moved forward
             reordered[24:28] = frame[12:16]   # Q parity moved to the end
 
-            #map erasure positions from CIRC layout to reedsolo layout:
-            #CIRC pos  0-11 (data)   → reedsolo pos  0-11  (unchanged)
-            #CIRC pos 12-15 (Q par.) → reedsolo pos 24-27  (+12)
-            #CIRC pos 16-27 (data)   → reedsolo pos 12-23  (-4)
+            # Map erasure positions from CIRC layout to reedsolo layout:
+            # CIRC pos  0-11 (data)   → reedsolo pos  0-11  (unchanged)
+            # CIRC pos 12-15 (Q par.) → reedsolo pos 24-27  (+12)
+            # CIRC pos 16-27 (data)   → reedsolo pos 12-23  (-4)
             erase_pos = []
             for j in range(28):
                 if flags[j]:
@@ -565,8 +558,9 @@ class AudioCD:
             try:
                 decoded, _, err = self.rsc2.decode(bytes(reordered),
                                                    erase_pos=erase_pos if erase_pos else None)
-                ERR = len(err)          # number of corrected positions (errors + erasures)
+                ERR = len(err)              # number of corrected positions (errors + erasures)
                 output_dec = list(decoded)  # 24 decoded data bytes
+
             except Exception:
                 # C2 could not correct: too many erasures or additional symbol errors.
                 # Pass through the raw (corrupted) data bytes and flag for interpolation.
@@ -597,42 +591,37 @@ class AudioCD:
 
         input = input.astype('B')
 
-        #step 1: de-interleave
-        #encoder interleaved the 24 bytes of each frame by separating even- and
-        #odd-indexed bytes into two groups, placing them in consecutive half-frames.
-        #physically separates the even and odd audio samples on disc so that
-        #burst error destroying several adjacent bytes only affects one sample from
-        #each stereo pair, making concealment by interpolation more effective.
-        #encoder interleave:
-        #even byte positions (0,2,4,...,22) of a frame → output positions 0-11
-        #odd  byte positions (1,3,5,...,23) of a frame → output positions 12-2
-        #inverse (de-interleave):
-        #input positions  0-11 → even byte positions (0,2,...,22) of temp frame
-        #input positions 12-23 → odd  byte positions (1,3,...,23) of temp frame
+        # De-interleave:
+        # Encoder interleaved the 24 bytes of each frame by separating even- and odd-indexed bytes into two groups, placing them in consecutive half-frames
+        # Physically separates the even and odd audio samples on disc so that burst error destroying several adjacent bytes only affects one sample from each stereo pair, making concealment by interpolation more effective. 
+        # Encoder interleave:
+        #   even byte positions (0,2,4,...,22) of a frame → output positions 0-11
+        #   odd  byte positions (1,3,5,...,23) of a frame → output positions 12-2
+        # Inverse (de-interleave):
+        #   input positions  0-11 → even byte positions (0,2,...,22) of temp frame
+        #   input positions 12-23 → odd  byte positions (1,3,...,23) of temp frame
         output_temp = np.zeros(int(n_frames) * 24, dtype='B')
         flags_temp  = np.zeros(int(n_frames) * 24)
         for n in range(int(n_frames)):
             for i in range(12):
-                output_temp[n*24 + i*2]     = input[n*24 + i]        # even positions
-                output_temp[n*24 + i*2 + 1] = input[n*24 + i + 12]   # odd positions
+                output_temp[n*24 + i*2]     = input[n*24 + i]               # even positions
+                output_temp[n*24 + i*2 + 1] = input[n*24 + i + 12]          # odd positions
                 flags_temp[n*24 + i*2]      = erasure_flags_in[n*24 + i]
                 flags_temp[n*24 + i*2 + 1]  = erasure_flags_in[n*24 + i + 12]
 
-        #step 2: undo 2-frame delay on even-word bytes
-        #encoder delayed even-numbered audio words (bytes where (i//4)%2 == 0)
-        #by 2 frames before interleaving.  This separates consecutive audio samples
-        #on disc so that an uncorrectable burst destroying several frames leaves
-        #alternating valid and invalid samples, enabling linear interpolation.
+        # Undo 2-frame delay on even-word bytes
+        # Encoder delayed even-numbered audio words (bytes where (i//4)%2 == 0) by 2 frames before interleaving.  This separates consecutive audio samples on disc so that an uncorrectable burst destroying several frames leaves alternating valid and invalid samples, enabling linear interpolation.
+
         # Encoder delay mapping:  original frame n, byte i (even-word) → temp frame n+2
         #                         original frame n, byte i (odd-word)  → temp frame n
-        #inverse: original frame m, byte i =
+        # Inverse: original frame m, byte i =
         #   temp frame m+2, byte i   if (i//4)%2 == 0  (even-word bytes were delayed)
         #   temp frame m,   byte i   otherwise
-        #output has 2 fewer frames than the temp array because reconstructing
-        # frame 0 requires temp frame 2 for its delayed bytes.
-        n_frames_output = int(n_frames) - 2
+
+        n_frames_output = int(n_frames) - 2 # output has 2 fewer frames because undoing the 2-frame delay
         output = np.zeros(n_frames_output * 24, dtype='B')
         erasure_flags_out = np.zeros(n_frames_output * 24)
+
         for m in range(n_frames_output):
             for i in range(24):
                 if (i // 4) % 2 == 0:   # even-word byte: was delayed, fetch from 2 frames ahead
